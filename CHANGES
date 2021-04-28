@@ -1,2 +1,8 @@
+*** Version 2 ***
+- complete code redesign
+- added support for sending & receiving any data type using the new MAnyData class
+- the setMaxMessageSize() method now throws MsgESSRuntimeException() instead of MsgESSException()
+
+
 *** Version 1 ***
 - initial release (functionally equal to Python library version 4)

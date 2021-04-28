@@ -42,7 +42,7 @@ import java.util.zip.*;
  * message can be assigned a message class that allows the app using the library to multiplex message channels.
  */
 public class MsgESS {
-    public static final int LIBRARY_VERSION = 1;
+    public static final int LIBRARY_VERSION = 2;
     public static final int PROTOCOL_VERSION = 3;
 
     private static final byte[] MAGIC_HEADER_STRING = "MsgESSbegin".getBytes(StandardCharsets.US_ASCII);
@@ -89,11 +89,10 @@ public class MsgESS {
      * Set the maximum accepted message size while receiving.
      *
      * @param maxMessageSize The new maximum message size in bytes.
-     * @throws MsgESSException If the specified maximum message size is negative.
      */
-    public void setMaxMessageSize(int maxMessageSize) throws MsgESSException {
+    public void setMaxMessageSize(int maxMessageSize) {
         if(maxMessageSize < 0)
-            throw new MsgESSException("The new maximum message size is invalid!");
+            throw new MsgESSRuntimeException("The new maximum message size is invalid!");
 
         this.maxMessageSize = maxMessageSize;
     }
@@ -106,7 +105,8 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the sending process.
      */
     public void sendBinaryData(MBinaryData binaryData) throws MsgESSException {
-        sendBinaryData(binaryData, DATA_TYPE_BINARY);
+        MAnyData data = new MAnyData(MAnyData.DataType.BINARY, binaryData.getBinaryData(), binaryData.getMessageClass());
+        sendAnyData(data);
     }
 
     /**
@@ -116,7 +116,11 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the receiving process.
      */
     public MBinaryData receiveBinaryData() throws MsgESSException {
-        return receiveBinaryData(DATA_TYPE_BINARY);
+        MAnyData data = receiveAnyData();
+        if(data.getDataType() != MAnyData.DataType.BINARY)
+            throw new MsgESSException("The received message has an unwanted data type!");
+
+        return new MBinaryData((byte[]) data.getData(), data.getMessageClass());
     }
 
     /**
@@ -126,7 +130,8 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the sending process.
      */
     public void sendString(MString string) throws MsgESSException {
-        sendString(string, DATA_TYPE_STRING);
+        MAnyData data = new MAnyData(MAnyData.DataType.STRING, string.getString(), string.getMessageClass());
+        sendAnyData(data);
     }
 
     /**
@@ -136,7 +141,11 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the receiving process.
      */
     public MString receiveString() throws MsgESSException {
-        return receiveString(DATA_TYPE_STRING);
+        MAnyData data = receiveAnyData();
+        if(data.getDataType() != MAnyData.DataType.STRING)
+            throw new MsgESSException("The received message has an unwanted data type!");
+
+        return new MString((String) data.getData(), data.getMessageClass());
     }
 
     /**
@@ -146,8 +155,8 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the sending process.
      */
     public void sendJSONArray(MJSONArray jsonArray) throws MsgESSException {
-        MString string = new MString(jsonArray.getJSONArray().toString(), jsonArray.getMessageClass());
-        sendString(string, DATA_TYPE_JSON_ARRAY);
+        MAnyData data = new MAnyData(MAnyData.DataType.JSON_ARRAY, jsonArray.getJSONArray(), jsonArray.getMessageClass());
+        sendAnyData(data);
     }
 
     /**
@@ -157,16 +166,11 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the receiving process.
      */
     public MJSONArray receiveJSONArray() throws MsgESSException {
-        MString string = receiveString(DATA_TYPE_JSON_ARRAY);
+        MAnyData data = receiveAnyData();
+        if(data.getDataType() != MAnyData.DataType.JSON_ARRAY)
+            throw new MsgESSException("The received message has an unwanted data type!");
 
-        JSONArray jsonArray;
-        try {
-            jsonArray = new JSONArray(string.getString());
-        } catch (JSONException e) {
-            throw new MsgESSException("Failed to deserialize the received JSON array!", e);
-        }
-
-        return new MJSONArray(jsonArray, string.getMessageClass());
+        return new MJSONArray((JSONArray) data.getData(), data.getMessageClass());
     }
 
     /**
@@ -176,8 +180,8 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the sending process.
      */
     public void sendJSONObject(MJSONObject jsonObject) throws MsgESSException {
-        MString string = new MString(jsonObject.getJSONObject().toString(), jsonObject.getMessageClass());
-        sendString(string, DATA_TYPE_JSON_OBJECT);
+        MAnyData data = new MAnyData(MAnyData.DataType.JSON_OBJECT, jsonObject.getJSONObject(), jsonObject.getMessageClass());
+        sendAnyData(data);
     }
 
     /**
@@ -187,31 +191,57 @@ public class MsgESS {
      * @throws MsgESSException If any error is encountered during the receiving process.
      */
     public MJSONObject receiveJSONObject() throws MsgESSException {
-        MString string = receiveString(DATA_TYPE_JSON_OBJECT);
+        MAnyData data = receiveAnyData();
+        if(data.getDataType() != MAnyData.DataType.JSON_OBJECT)
+            throw new MsgESSException("The received message has an unwanted data type!");
 
-        JSONObject jsonObject;
-        try {
-            jsonObject = new JSONObject(string.getString());
-        } catch (JSONException e) {
-            throw new MsgESSException("Failed to deserialize the received JSON object!", e);
-        }
-
-        return new MJSONObject(jsonObject, string.getMessageClass());
+        return new MJSONObject((JSONObject) data.getData(), data.getMessageClass());
     }
 
-
-
-    private void sendBinaryData(MBinaryData binaryData, byte dataType) throws MsgESSException {
+    /**
+     * Send a message with any data type in its body to the socket. The data type is specified in the MAnyData instance.
+     *
+     * @param data The MAnyData object with the message and its data type to send.
+     * @throws MsgESSException If any error is encountered during the sending process.
+     */
+    public void sendAnyData(MAnyData data) throws MsgESSException {
         // --- prepare data
-        byte[] bytes = binaryData.getBinaryData();
+        byte[] bytes;
+        byte dataType;
+        switch (data.getDataType()) {
+            case BINARY:
+                dataType = DATA_TYPE_BINARY;
+                bytes = (byte[]) data.getData();
+                break;
+
+            case STRING:
+                dataType = DATA_TYPE_STRING;
+                bytes = convertStringToBytes((String) data.getData());
+                break;
+
+            case JSON_ARRAY:
+                dataType = DATA_TYPE_JSON_ARRAY;
+                bytes = convertStringToBytes(((JSONArray) data.getData()).toString()); // type cast is unnecessarily done because we want to make sure that the data type is right
+                break;
+
+            case JSON_OBJECT:
+                dataType = DATA_TYPE_JSON_OBJECT;
+                bytes = convertStringToBytes(((JSONObject) data.getData()).toString()); // type cast is unnecessarily done because we want to make sure that the data type is right
+                break;
+
+            default:
+                throw new MsgESSRuntimeException("The data type in MAnyData is invalid! (this should never happen)");
+        }
+
         if(compressMessages) {
             bytes = compressBytes(bytes);
             System.gc();
         }
 
         byte[] bytesLength = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(bytes.length).array();
-        byte[] messageClass = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(binaryData.getMessageClass()).array();
+        byte[] messageClass = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(data.getMessageClass()).array();
         byte isMessageCompressed = (byte) (compressMessages ? 1 : 0);
+
 
         // --- assemble message
         // message header = magic string (11b), protocol version (4b), raw bytes length (4b),
@@ -227,15 +257,23 @@ public class MsgESS {
         System.arraycopy(bytes, 0, message, 25, bytes.length);
         System.arraycopy(MAGIC_FOOTER_STRING, 0, message, 25 + bytes.length, 9);
 
+
         // --- clean up useless & potentially huge data
         bytes = null;
         System.gc();
+
 
         // --- send message
         sendAllBytesToSocket(message);
     }
 
-    private MBinaryData receiveBinaryData(byte dataType) throws MsgESSException {
+    /**
+     * Receive a message with any data type in its body from the socket. Blocks until a full message is received. The data type is specified in the MAnyData instance.
+     *
+     * @return The MAnyData object with the received message and its data type.
+     * @throws MsgESSException If any error is encountered during the receiving process.
+     */
+    public MAnyData receiveAnyData() throws MsgESSException {
         /// --- receive, check and parse header (see sendBinaryData(MBinaryData, byte) for header items)
         byte[] header = receiveNBytesFromSocket(25);
 
@@ -257,8 +295,8 @@ public class MsgESS {
 
         boolean isMessageCompressed = (header[23] != 0);
 
-        if(header[24] != dataType)
-            throw new MsgESSException("The received message has an invalid data type!");
+        byte dataType = header[24];
+
 
         // --- receive and possibly decompress body
         byte[] bytes = receiveNBytesFromSocket(bytesLength);
@@ -267,28 +305,56 @@ public class MsgESS {
             System.gc();
         }
 
+
         // --- receive and check footer
         byte[] footer = receiveNBytesFromSocket(9);
         if(!Arrays.equals(MAGIC_FOOTER_STRING, footer))
             throw new MsgESSException("The received message has an invalid magic footer string!");
 
-        return new MBinaryData(bytes, messageClass);
+
+        // --- disassemble message
+        MAnyData data;
+        switch (dataType) {
+            case DATA_TYPE_BINARY:
+                data = new MAnyData(MAnyData.DataType.BINARY, bytes, messageClass);
+                break;
+
+            case DATA_TYPE_STRING:
+                data = new MAnyData(MAnyData.DataType.STRING, convertBytesToString(bytes), messageClass);
+                break;
+
+            case DATA_TYPE_JSON_ARRAY:
+                try {
+                    data = new MAnyData(MAnyData.DataType.JSON_ARRAY, new JSONArray(convertBytesToString(bytes)), messageClass);
+                } catch (JSONException e) {
+                    throw new MsgESSException("Failed to deserialize the received JSON array!", e);
+                }
+                break;
+
+            case DATA_TYPE_JSON_OBJECT:
+                try {
+                    data = new MAnyData(MAnyData.DataType.JSON_OBJECT, new JSONObject(convertBytesToString(bytes)), messageClass);
+                } catch (JSONException e) {
+                    throw new MsgESSException("Failed to deserialize the received JSON object!", e);
+                }
+                break;
+
+            default:
+                throw new MsgESSException("The received message has an invalid data type!");
+        }
+
+        return data;
     }
 
-    private void sendString(MString string, byte dataType) throws MsgESSException {
-        MBinaryData binaryData = new MBinaryData(string.getString().getBytes(StandardCharsets.UTF_8), string.getMessageClass());
-        sendBinaryData(binaryData, dataType);
+
+
+    private byte[] convertStringToBytes(String string) {
+        return string.getBytes(StandardCharsets.UTF_8);
     }
 
-    private MString receiveString(byte dataType) throws MsgESSException {
-        MBinaryData binaryData = receiveBinaryData(dataType);
-
-        String string = new String(binaryData.getBinaryData(), StandardCharsets.UTF_8);
-
-        return new MString(string, binaryData.getMessageClass());
+    private String convertBytesToString(byte[] bytes) {
+        return new String(bytes, StandardCharsets.UTF_8);
     }
-
-
 
     private byte[] compressBytes(byte[] uncompressedBytes) throws MsgESSException {
         try (
